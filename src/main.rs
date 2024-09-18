@@ -1,8 +1,11 @@
 use axum::{response::Json, routing::get, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::net::SocketAddr;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
+use tracing::{info, warn};
+use tracing_subscriber::FmtSubscriber;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Order {
@@ -61,10 +64,15 @@ struct ItemsInfo {
 
 #[tokio::main]
 async fn main() {
-    let app = Router::new().route("/", get(root_handler));
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(tracing::Level::INFO)
+        .finish();
 
+    tracing::subscriber::set_global_default(subscriber).expect("Setting default subscriber failed");
+
+    let app = Router::new().route("/", get(root_handler));
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    println!("listening on {}", addr);
+    info!("Listening on {}", addr);
 
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
@@ -72,14 +80,33 @@ async fn main() {
         .unwrap();
 }
 
-async fn root_handler() -> Json<Order> {
-    let mut file = File::open("model.json").await.expect("Cannot open file");
+async fn root_handler() -> Result<Json<Order>, Json<serde_json::Value>> {
+    info!("Received request to root handler");
+
+    let mut file = match File::open("model.json").await {
+        Ok(f) => f,
+        Err(e) => {
+            warn!("Cannot open file: {}", e);
+            return Err(Json(json!({"error": "Cannot open file"})));
+        }
+    };
+
     let mut data = String::new();
-    file.read_to_string(&mut data)
-        .await
-        .expect("Cannot read file");
+    match file.read_to_string(&mut data).await {
+        Ok(_) => {}
+        Err(e) => {
+            warn!("Cannot read file: {}", e);
+            return Err(Json(json!({"error": "Cannot read file"})));
+        }
+    }
 
-    let order: Order = serde_json::from_str(&data).expect("Cannot parse JSON");
+    let order: Order = match serde_json::from_str(&data) {
+        Ok(o) => o,
+        Err(e) => {
+            warn!("Cannot parse JSON: {}", e);
+            return Err(Json(json!({"error": "Cannot parse JSON"})));
+        }
+    };
 
-    Json(order)
+    Ok(Json(order))
 }
