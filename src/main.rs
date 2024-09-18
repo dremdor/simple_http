@@ -1,6 +1,7 @@
-use axum::{response::Json, routing::get, Router};
+use axum::{http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
+use sqlx::PgPool;
 use std::net::SocketAddr;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -65,15 +66,23 @@ struct ItemsInfo {
 
 #[tokio::main]
 async fn main() {
+    // Подключение переменных окружения
+    dotenv::dotenv().ok();
     //Установка подписчика для логирования
     let subscriber = FmtSubscriber::builder()
         .with_max_level(tracing::Level::INFO)
         .finish();
-
     tracing::subscriber::set_global_default(subscriber).expect("Setting default subscriber failed");
 
+    let pool = PgPool::connect("postgres://db_admin:12345@localhost/order_table")
+        .await
+        .expect("Failed to connect to database");
+
     //иницализация маршрутов
-    let app = Router::new().route("/", get(root_handler));
+    let app = Router::new().route(
+        "/orders/:order_uid",
+        get(|order_uid| async move { get_order(pool.clone(), order_uid).await }),
+    );
     //    .route("/order/:id", get(get_order_by_id));
     // инициализация адреса
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -121,6 +130,30 @@ async fn root_handler() -> Result<Json<Order>, Json<serde_json::Value>> {
     Ok(Json(order))
 }
 
-// async fn get_order_by_id() -> Result<Json<Order>, Json<serde_json::Value>> {
-//     Ok(Json(order))
-// }
+async fn get_order(pool: PgPool, order_uid: String) -> Result<Json<Order>, (StatusCode, String)> {
+    // получение данных из базы данных по ключу
+    let row = sqlx::query!(
+        r#"SELECT data FROM orders_json WHERE data->>'order_uid' = $1"#,
+        order_uid
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        warn!("Database query failed: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".to_string(),
+        )
+    })?;
+
+    // парсинг полученных данных в json
+    let order: Order = serde_json::from_value(row.data.unwrap_or_default()).map_err(|e| {
+        warn!("Failed to parse JSON {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".to_string(),
+        )
+    })?;
+    // отправление json по запросу
+    Ok(Json(order))
+}
