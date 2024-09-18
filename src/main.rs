@@ -7,6 +7,7 @@ use tokio::io::AsyncReadExt;
 use tracing::{info, warn};
 use tracing_subscriber::FmtSubscriber;
 
+//Структура описывающаяя Json
 #[derive(Debug, Serialize, Deserialize)]
 struct Order {
     order_uid: String,
@@ -64,25 +65,33 @@ struct ItemsInfo {
 
 #[tokio::main]
 async fn main() {
+    //Установка подписчика для логирования
     let subscriber = FmtSubscriber::builder()
         .with_max_level(tracing::Level::INFO)
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("Setting default subscriber failed");
 
+    //иницализация маршрутов
     let app = Router::new().route("/", get(root_handler));
+    //    .route("/order/:id", get(get_order_by_id));
+    // инициализация адреса
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    // логирование о начале работы сервера
     info!("Listening on {}", addr);
-
+    // запуск сервера
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
         .unwrap();
 }
 
+// обработчик корня, возвращаемый тип данных
 async fn root_handler() -> Result<Json<Order>, Json<serde_json::Value>> {
+    // логирование запросов
     info!("Received request to root handler");
 
+    // пробная обработка json из файла
     let mut file = match File::open("model.json").await {
         Ok(f) => f,
         Err(e) => {
@@ -91,6 +100,7 @@ async fn root_handler() -> Result<Json<Order>, Json<serde_json::Value>> {
         }
     };
 
+    // чтение даты из файла в строку
     let mut data = String::new();
     match file.read_to_string(&mut data).await {
         Ok(_) => {}
@@ -99,7 +109,7 @@ async fn root_handler() -> Result<Json<Order>, Json<serde_json::Value>> {
             return Err(Json(json!({"error": "Cannot read file"})));
         }
     }
-
+    // парсинг полученной строки в json
     let order: Order = match serde_json::from_str(&data) {
         Ok(o) => o,
         Err(e) => {
@@ -110,3 +120,7 @@ async fn root_handler() -> Result<Json<Order>, Json<serde_json::Value>> {
 
     Ok(Json(order))
 }
+
+// async fn get_order_by_id() -> Result<Json<Order>, Json<serde_json::Value>> {
+//     Ok(Json(order))
+// }
