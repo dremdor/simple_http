@@ -7,6 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
+use std::sync::Arc;
 use std::net::SocketAddr;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -83,13 +84,12 @@ async fn main() {
         .await
         .expect("Failed to connect to database");
 
+    let shared_pool = Arc::new(pool);
+
     //иницализация маршрутов
-    let app = Router::new().route(
-        "/orders/:order_uid",
-        get(get_order),
-    )
-        .layer(Extension(pool.clone()));
-    //    .route("/order/:id", get(get_order_by_id));
+    let app = Router::new()
+        .route("/orders/:order_uid", get(get_order))
+        .layer(Extension(shared_pool));
     // инициализация адреса
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     // логирование о начале работы сервера
@@ -101,14 +101,18 @@ async fn main() {
         .unwrap();
 }
 
-async fn get_order(Path(order_uid): Path<String>, Extension(pool): Extension<PgPool>) -> Result<Json<Order>, (StatusCode, String)> {
-    // получение данных из базы данных по ключу
+async fn get_order(
+    Path(order_uid): Path<String>,
+    Extension(pool): Extension<Arc<PgPool>>,
+)-> Result<Json<Order>, (StatusCode, String)> {
+    // логирование при получении запроса
     info!("Received request for order: {}", order_uid);
+    // получение данных из базы данных по ключу
     let row = sqlx::query!(
         r#"SELECT data FROM orders_json WHERE order_uid = $1"#,
         order_uid
     )
-    .fetch_one(&pool)
+    .fetch_one(&*pool)
     .await
     .map_err(|e| {
         warn!("Database query failed: {}", e);
