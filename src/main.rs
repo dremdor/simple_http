@@ -1,6 +1,11 @@
-use axum::{http::StatusCode, routing::get, Json, Router};
+use axum::{
+    extract::{Path, Extension},
+    http::StatusCode,
+    routing::get,
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use sqlx::PgPool;
 use std::net::SocketAddr;
 use tokio::fs::File;
@@ -81,8 +86,9 @@ async fn main() {
     //иницализация маршрутов
     let app = Router::new().route(
         "/orders/:order_uid",
-        get(|order_uid| async move { get_order(pool.clone(), order_uid).await }),
-    );
+        get(get_order),
+    )
+        .layer(Extension(pool.clone()));
     //    .route("/order/:id", get(get_order_by_id));
     // инициализация адреса
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -95,45 +101,11 @@ async fn main() {
         .unwrap();
 }
 
-// обработчик корня, возвращаемый тип данных
-async fn root_handler() -> Result<Json<Order>, Json<serde_json::Value>> {
-    // логирование запросов
-    info!("Received request to root handler");
-
-    // пробная обработка json из файла
-    let mut file = match File::open("model.json").await {
-        Ok(f) => f,
-        Err(e) => {
-            warn!("Cannot open file: {}", e);
-            return Err(Json(json!({"error": "Cannot open file"})));
-        }
-    };
-
-    // чтение даты из файла в строку
-    let mut data = String::new();
-    match file.read_to_string(&mut data).await {
-        Ok(_) => {}
-        Err(e) => {
-            warn!("Cannot read file: {}", e);
-            return Err(Json(json!({"error": "Cannot read file"})));
-        }
-    }
-    // парсинг полученной строки в json
-    let order: Order = match serde_json::from_str(&data) {
-        Ok(o) => o,
-        Err(e) => {
-            warn!("Cannot parse JSON: {}", e);
-            return Err(Json(json!({"error": "Cannot parse JSON"})));
-        }
-    };
-
-    Ok(Json(order))
-}
-
-async fn get_order(pool: PgPool, order_uid: String) -> Result<Json<Order>, (StatusCode, String)> {
+async fn get_order(Path(order_uid): Path<String>, Extension(pool): Extension<PgPool>) -> Result<Json<Order>, (StatusCode, String)> {
     // получение данных из базы данных по ключу
+    info!("Received request for order: {}", order_uid);
     let row = sqlx::query!(
-        r#"SELECT data FROM orders_json WHERE data->>'order_uid' = $1"#,
+        r#"SELECT data FROM orders_json WHERE order_uid = $1"#,
         order_uid
     )
     .fetch_one(&pool)
@@ -154,6 +126,8 @@ async fn get_order(pool: PgPool, order_uid: String) -> Result<Json<Order>, (Stat
             "Internal server error".to_string(),
         )
     })?;
+    //логирование при успехе
+    info!("Successfully retrieved data for order: {}", order_uid);
     // отправление json по запросу
     Ok(Json(order))
 }
