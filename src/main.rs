@@ -135,3 +135,31 @@ async fn get_order(
     // отправление json по запросу
     Ok(Json(order))
 }
+
+async fn post_order(
+    Json(order): Json<Order>,
+    Extension(pool): Extension<Arc<PgPool>>,
+    ) -> Result<(StatusCode, String), (StatusCode, String)> {
+    // логирование получения post запроса 
+    info!("Received post request for order: {}", order.order_uid);
+    // попытка вставки в бд
+    let result = sqlx::query!(r#"
+        INSERT INTO orders_json (order_uid, data)
+        VALUES ($1, $2);"#,
+        order.order_uid,
+        serde_json::to_value(&order).unwrap()
+    )
+    .execute(&*pool)
+    .await;
+    // обработка возвращаемых ошибок
+    match result {
+        Ok(_) => {
+            info!("Order {} posted successfully", order.order_uid);
+            Ok((StatusCode::OK, format!("Order {} posted successfully", order.order_uid)))
+        }
+        Err(e) => {
+            warn!("Failed to post order {}: {}", order.order_uid, e);
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to insert order".to_string()))
+        }
+    }
+}
