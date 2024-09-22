@@ -1,16 +1,13 @@
 use axum::{
     extract::{Path, Extension},
     http::StatusCode,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sqlx::PgPool;
 use std::sync::Arc;
 use std::net::SocketAddr;
-use tokio::fs::File;
-use tokio::io::AsyncReadExt;
 use tracing::{info, warn};
 use tracing_subscriber::FmtSubscriber;
 
@@ -89,6 +86,7 @@ async fn main() {
     //иницализация маршрутов
     let app = Router::new()
         .route("/orders/:order_uid", get(get_order))
+        .route("/orders", post(post_order))
         .layer(Extension(shared_pool));
     // инициализация адреса
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -137,8 +135,8 @@ async fn get_order(
 }
 
 async fn post_order(
-    Json(order): Json<Order>,
     Extension(pool): Extension<Arc<PgPool>>,
+    Json(order): Json<Order>,
     ) -> Result<(StatusCode, String), (StatusCode, String)> {
     // логирование получения post запроса 
     info!("Received post request for order: {}", order.order_uid);
@@ -150,16 +148,15 @@ async fn post_order(
         serde_json::to_value(&order).unwrap()
     )
     .execute(&*pool)
-    .await;
+    .await
+    .map_err(|e| {
+        warn!("Failed to post order {}: {}", order.order_uid, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to insert order".to_string(),
+        )
+    })?;
     // обработка возвращаемых ошибок
-    match result {
-        Ok(_) => {
-            info!("Order {} posted successfully", order.order_uid);
-            Ok((StatusCode::OK, format!("Order {} posted successfully", order.order_uid)))
-        }
-        Err(e) => {
-            warn!("Failed to post order {}: {}", order.order_uid, e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to insert order".to_string()))
-        }
-    }
+    info!("Order {} posted successfully", order.order_uid);
+    Ok((StatusCode::OK, format!("Order {} posted successfully", order.order_uid)))
 }
