@@ -148,13 +148,23 @@ async fn main() {
         .unwrap();
 }
 
+// Асинхронная функция для получения заказа по уникальному айди
+// Первый аргумент передается через Extension обернутый в Arc
+// А второй аргумент мы получаем из пути по которому идет запрос,
+// замечу, что порядок аргументов важен для обработчиков, т.к.
+// внутреннее устройство запускает извлечение параметров слева направо
+// что может спровоцировать Handler error
 async fn get_order(
-    Path(order_uid): Path<String>,
     Extension(pool): Extension<Arc<PgPool>>,
+    Path(order_uid): Path<String>,
 )-> Result<Json<Order>, (StatusCode, String)> {
     // логирование при получении запроса
     info!("Received get request for order: {}", order_uid);
     // получение данных из базы данных по ключу
+    // реализация запроса сделана не через макрос, чтобы иметь
+    // в случае чего возможность использовать данный сервис и для
+    // других баз данных, надо лишь добавить их десериализацию через
+    // структуры
     let row = sqlx::query(
         r#"SELECT data FROM orders_json WHERE order_uid = $1"#,
     )
@@ -168,7 +178,7 @@ async fn get_order(
             "Internal server error".to_string(),
         )
     })?;
-
+    // попытка получить данные из тела запроса
     let data: serde_json::Value = row
         .try_get("data")
         .unwrap_or_default();
@@ -186,13 +196,21 @@ async fn get_order(
     Ok(Json(order))
 }
 
+// Асинхронная функция для post запросов, пул соединений передается
+// аналогично предыдущей функции, и также передается Json который на
+// этапе захода в функцию десериализуется в структуру, Т.к. сервис
+// достаточно простой, было выбрано решение хранить всю Json целиком,
+// а в качестве ключа использовать order_uid, в дальнейшем можно использовать
+// redis для кеширования наиболее часто запрашиваемых полей
 async fn post_order(
     Extension(pool): Extension<Arc<PgPool>>,
     Json(order): Json<Order>,
     ) -> Result<(StatusCode, String), (StatusCode, String)> {
     // логирование получения post запроса 
     info!("Received post request for order: {}", order.order_uid);
-    // попытка вставки в бд
+    // попытка вставки в бд т.к. я не использую виртуальное окружение
+    // каждый аргумент биндим в аргументы запроса, а также сериализуем нашу
+    // структуру обратно в json, т.к. тип данных в БД jsonb
     sqlx::query(
         r#"INSERT INTO orders_json (order_uid, data)
         VALUES ($1, $2);"#,
@@ -208,7 +226,8 @@ async fn post_order(
             "Failed to insert order".to_string(),
         )
     })?;
-    // обработка возвращаемых ошибок
+    // Вывод дополнительного сообщения помимо кода успеха
+    // в случае успешной записи в БД
     info!("Order {} posted successfully", order.order_uid);
     Ok((StatusCode::OK, format!("Order {} posted successfully", order.order_uid)))
 }
