@@ -5,17 +5,22 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use std::net::SocketAddr;
 use tracing::{info, warn};
 use tracing_subscriber::FmtSubscriber;
+use clap::Parser;
 
-//Структура описывающаяя Json
+// Структура описывающаяя данные в формате Json, для каждого заказа
+// Добавление атрибутов: 
+//  Debug - для форматирования значений
+//  Serialize - для конвертирования из структуры в Json
+//  Deserialize - для конвертирования из json в структуру
 #[derive(Debug, Serialize, Deserialize)]
 struct Order {
     order_uid: String,
-    track_number: String,
+    track_number: String, 
     entry: String,
     delivery: DeliveryInfo,
     payment: PaymentInfo,
@@ -66,20 +71,40 @@ struct ItemsInfo {
     brand: String,
     status: u32,
 }
+// Структура для парсинга аргументов командой строки,
+//  в нашем случае это url базы данных с логином, паролем и адресом
+//  и адрес самого сервера
+// Добавление атрибутов для 
+#[derive(Parser, Debug)]
+struct Args {
+    // Атрибуты флагов:
+    //  - short, можно использовать как -- -d <>
+    //  - long, можно использовать как -- --db_url <>
+    #[arg(short, long)]
+    db_url: String,
+    //  - short, можно использовать как -- -a <>
+    //  - long, можно использовать как -- --addr <>
+    #[arg(short, long, default_value = "127.0.0.1:3000")]
+    addr: String,
+}
 
 #[tokio::main]
 async fn main() {
-    // Подключение переменных окружения
-    dotenv::dotenv().ok();
     //Установка подписчика для логирования
     let subscriber = FmtSubscriber::builder()
         .with_max_level(tracing::Level::INFO)
         .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("Setting default subscriber failed");
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("Setting default subscriber failed");
 
-    let pool = PgPool::connect("postgres://db_admin:12345@localhost/order_table")
+    let args = Args::parse();
+    
+    info!("Connecting to database: {}", args.db_url);
+    
+
+    let pool = PgPool::connect(&args.db_url)
         .await
-        .expect("Failed to connect to database");
+        .expect("Failed to connect to the database");
 
     let shared_pool = Arc::new(pool);
 
@@ -89,7 +114,7 @@ async fn main() {
         .route("/orders", post(post_order))
         .layer(Extension(shared_pool));
     // инициализация адреса
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let addr: SocketAddr = args.addr.parse().expect("Invalid address");
     // логирование о начале работы сервера
     info!("Listening on {}", addr);
     // запуск сервера
@@ -104,12 +129,12 @@ async fn get_order(
     Extension(pool): Extension<Arc<PgPool>>,
 )-> Result<Json<Order>, (StatusCode, String)> {
     // логирование при получении запроса
-    info!("Received request for order: {}", order_uid);
+    info!("Received get request for order: {}", order_uid);
     // получение данных из базы данных по ключу
-    let row = sqlx::query!(
+    let row = sqlx::query(
         r#"SELECT data FROM orders_json WHERE order_uid = $1"#,
-        order_uid
     )
+    .bind(&order_uid)
     .fetch_one(&*pool)
     .await
     .map_err(|e| {
@@ -120,8 +145,11 @@ async fn get_order(
         )
     })?;
 
+    let data: serde_json::Value = row
+        .try_get("data")
+        .unwrap_or_default();
     // парсинг полученных данных в json
-    let order: Order = serde_json::from_value(row.data.unwrap_or_default()).map_err(|e| {
+    let order: Order = serde_json::from_value(data).map_err(|e| {
         warn!("Failed to parse JSON {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -141,12 +169,12 @@ async fn post_order(
     // логирование получения post запроса 
     info!("Received post request for order: {}", order.order_uid);
     // попытка вставки в бд
-    let result = sqlx::query!(r#"
-        INSERT INTO orders_json (order_uid, data)
+    sqlx::query(
+        r#"INSERT INTO orders_json (order_uid, data)
         VALUES ($1, $2);"#,
-        order.order_uid,
-        serde_json::to_value(&order).unwrap()
     )
+    .bind(&order.order_uid)
+    .bind(serde_json::to_value(&order).unwrap())
     .execute(&*pool)
     .await
     .map_err(|e| {
