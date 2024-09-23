@@ -34,6 +34,7 @@ struct Order {
     date_created: String,
     oof_shard: String,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 struct DeliveryInfo {
     name: String,
@@ -44,6 +45,7 @@ struct DeliveryInfo {
     region: String,
     email: String,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 struct PaymentInfo {
     transaction: String,
@@ -57,6 +59,7 @@ struct PaymentInfo {
     goods_total: u32,
     custom_fee: u32,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ItemsInfo {
     chrt_id: u64,
@@ -82,38 +85,59 @@ struct Args {
     //  - long, можно использовать как -- --db_url <>
     #[arg(short, long)]
     db_url: String,
+
     //  - short, можно использовать как -- -a <>
     //  - long, можно использовать как -- --addr <>
     #[arg(short, long, default_value = "127.0.0.1:3000")]
     addr: String,
 }
-
+// Добавление атрибута для поддержки выполнения асинхронного кодa
 #[tokio::main]
 async fn main() {
-    //Установка подписчика для логирования
+    // Создание подписчика для логирования
+    // c параметром логирования на уровне INFO и ниже(Warn, error)
+    // логи можно настроить под разные нужды,
     let subscriber = FmtSubscriber::builder()
         .with_max_level(tracing::Level::INFO)
         .finish();
+
+    // Инициализация нашего подписчика как глобального в программе
+    // Аналогичный вариант это tracing_subscriber::fmt::init()
+    // Использующий по умолчанию максимальный уровень INFO,
+    // простые логи для логирования в консоль
     tracing::subscriber::set_global_default(subscriber)
         .expect("Setting default subscriber failed");
 
+    // обработка аргументов командной строки, имеет встроенный парсер
+    // сохраняющий все поля в отдельную структуру
     let args = Args::parse();
-    
-    info!("Connecting to database: {}", args.db_url);
-    
 
+    // логирование о попытке подключения к БД 
+    info!("Connecting to database: {}", args.db_url);
+
+    // создание объекта , содержащего пул соединений к БД
+    // позволяет поддерживать несколько активных соединений к БД
+    // по умолчанию 10, на сам расширяется при необходимости
     let pool = PgPool::connect(&args.db_url)
         .await
         .expect("Failed to connect to the database");
 
+    // пул наших соединений оборачивается в Arc,
+    // атомарный счетчик ссылок, гарантирует, что объект,
+    // в нашем случае соединение будет активно, пока на него есть 
+    // ссылка, и что когда ссылок не будет оно станет неактивным
+    // обеспечивает неизменяемость
     let shared_pool = Arc::new(pool);
 
-    //иницализация маршрутов
+    // иницализация маршрутов
+    // каждый маршрут имеет доступ к общему пулу соединений,
+    // и внутри каждого обработчика этот пул можно извлечь
+    // через параметр Extension(pool)
     let app = Router::new()
         .route("/orders/:order_uid", get(get_order))
         .route("/orders", post(post_order))
         .layer(Extension(shared_pool));
-    // инициализация адреса
+    // инициализация адреса через парсинг аргументов командной строки
     let addr: SocketAddr = args.addr.parse().expect("Invalid address");
     // логирование о начале работы сервера
     info!("Listening on {}", addr);

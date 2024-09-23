@@ -75,10 +75,10 @@ async def get_order(session, order_id):
 async def main():
     # Открытие единой http сессии
     async with aiohttp.ClientSession() as session:
-        post_tasks = [post_order(session, i) for i in range(1, 11)]
+        post_tasks = [post_order(session, i) for i in range(1, 10001)]
         await asyncio.gather(*post_tasks)
         # Использование gather для параллельного запуска всех задач
-        get_tasks = [get_order(session, i) for i in range(1, 11)]
+        get_tasks = [get_order(session, i) for i in range(1, 10001)]
         await asyncio.gather(*get_tasks)
 
 
